@@ -153,3 +153,153 @@ fi
 <img width="2559" height="1439" alt="4" src="https://github.com/user-attachments/assets/1fa25f1b-e29b-4ef3-9930-55323c4c1637" />
 
 
+Скрипт восстановления:
+```
+#!/bin/bash
+
+#set -euo pipefail
+
+USER="kudryashov"
+REMOTE_USER="kudryashov"
+
+LOCAL_BASE="/home/$USER"
+REMOTE_BASE="/home/$REMOTE_USER/backup"
+
+REMOTE_HOST="192.168.10.209"
+
+LOG_FILE="/var/log/backup_rsync.log"
+TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
+
+
+
+log() {
+    echo "$TIMESTAMP [INFO]  $1" >> "$LOG_FILE"
+}
+error() {
+    echo "$TIMESTAMP [ERROR] $1" >> "$LOG_FILE"
+}
+
+
+
+if [ ! -d "$LOCAL_BASE" ]; then
+    echo "[ERROR] Directory $LOCAL_BASE not exist."
+    exit 1
+fi
+
+
+
+BACKUP_LIST=()
+readarray -t BACKUP_LIST < <(ssh "$REMOTE_USER@$REMOTE_HOST" "cd '$REMOTE_BASE' 2>/dev/null || exit 1
+    for dir in *; do
+        if [ -d \"\$dir\" ]; then
+            size=\$(du -sh \"\$dir\" 2>/dev/null | awk '{print \$1}')
+            printf '%s|%s\n' \"\$dir\" \"\$size\"
+        fi
+    done | sort -r")
+
+
+
+if [ ${#BACKUP_LIST[@]} -eq 0 ]; then
+    echo "[ERROR] On the $REMOTE_HOST in $REMOTE_BASE no backup copies."
+    exit 1
+fi
+
+
+
+BACKUPS=()
+SIZES=()
+
+
+
+echo "Available backups"
+for i in "${!BACKUP_LIST[@]}"; do
+    BACKUP_NAME="${BACKUP_LIST[$i]%%|*}"
+    BACKUP_SIZE="${BACKUP_LIST[$i]#*|}"
+    BACKUPS+=("$BACKUP_NAME")
+    SIZES+=("$BACKUP_SIZE")
+    printf "  %2d) %-30s — %8s\n" "$i" "$BACKUP_NAME" "$BACKUP_SIZE"
+done
+
+
+
+echo
+read -p "Select file to recover: " SELECTED_NUM
+
+if ! [[ "$SELECTED_NUM" =~ ^[0-9]+$ ]] || [ "$SELECTED_NUM" -ge "${#BACKUPS[@]}" ]; then
+    echo "[ERROR] invalid number."
+    exit 1
+fi
+
+RESTORE_SOURCE="${BACKUPS[$SELECTED_NUM]}"
+RESTORE_PATH="$REMOTE_BASE/$RESTORE_SOURCE"
+RESTORE_SIZE="${SIZES[$SELECTED_NUM]}"
+
+
+
+echo
+echo "Selected: $RESTORE_SOURCE — $RESTORE_SIZE"
+echo
+
+
+
+echo "Select recovery mode:"
+echo "  1) Full recovery (will replace all duplicate files)"
+echo "  2) Partial recovery (missing files only)"
+read -p "Enter 1 or 2: " MODE
+
+case "$MODE" in
+    1)
+        echo
+        read -p "All data in $LOCAL_BASE will be COMPLETELY replaced. Continue? (y/N): " CONFIRM
+        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+
+        log "Full recovery: $LOCAL_BASE"
+        find "$LOCAL_BASE" -mindepth 1 -maxdepth 1 ! -name ".*" -exec rm -rf {} + || {
+            error "Failed to recovery $LOCAL_BASE"
+            exit 1
+        }
+
+        log "Restoring: $RESTORE_PATH (Size: $RESTORE_SIZE)"
+        if rsync -av --delete --exclude='.*/' "$REMOTE_USER@$REMOTE_HOST:$RESTORE_PATH/" "$LOCAL_BASE/" >> "$LOG_FILE" 2>&1; then
+            log "Full restore successful: $RESTORE_SOURCE"
+            echo "Restore complete: $RESTORE_SOURCE (Size: $RESTORE_SIZE)"
+        else
+            error "rsync failed full restore from $RESTORE_SOURCE"
+            echo "[ERROR] Full restore"
+            exit 1
+        fi
+        ;;
+
+    2)
+        echo
+        read -p "ONLY deleted/missing files will be restored. Continue? (y/N): " CONFIRM
+        if [[ ! "$CONFIRM" =~ ^[Yy]$ ]]; then
+            echo "Cancelled."
+            exit 0
+        fi
+
+        log "Partial restore: $RESTORE_PATH (Size: $RESTORE_SIZE)"
+        if rsync -av --exclude='.*/' --ignore-existing "$REMOTE_USER@$REMOTE_HOST:$RESTORE_PATH/" "$LOCAL_BASE/" >> "$LOG_FILE" 2>&1; then
+            log "Partial restore successful: $RESTORE_SOURCE"
+            echo "ONLY missing files restored: $RESTORE_SOURCE (Size: $RESTORE_SIZE)"
+        else
+            error "rsync failed partial restore from $RESTORE_SOURCE"
+            echo "[ERROR] Patrial restore."
+            exit 1
+        fi
+        ;;
+
+    *)
+        echo "Invalid selection"
+        exit 1
+        ;;
+esac
+
+
+```
+
+<img width="2541" height="986" alt="5" src="https://github.com/user-attachments/assets/bf0c4b2a-825f-4b33-a571-02b037c9d096" />
+
