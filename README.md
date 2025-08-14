@@ -50,22 +50,106 @@
 
 ### Задание 4
 
-`Приведите ответ в свободной форме........`
-
-1. `Заполните здесь этапы выполнения, если требуется ....`
-2. `Заполните здесь этапы выполнения, если требуется ....`
-3. `Заполните здесь этапы выполнения, если требуется ....`
-4. `Заполните здесь этапы выполнения, если требуется ....`
-5. `Заполните здесь этапы выполнения, если требуется ....`
-6. 
+Скрипт и скриншот работы скрипта на бэкап. Ограничение в 10 мбит, логи, 5 штук бэкапов, синхронизация, проверка кэша и.т.д:
 
 ```
-Поле для вставки кода...
-....
-....
-....
-....
+#!/bin/bash
+
+USER="kudryashov"
+REMOTE_USER="kudryashov"
+
+LOCAL_BASE="/home/$USER"
+REMOTE_BASE="/home/$REMOTE_USER/backup"
+
+LOG_FILE="/var/log/backup_rsync.log"
+TIMESTAMP=$(date '+%Y-%m-%d_%H-%M-%S')
+
+BACKUP_DIR="$REMOTE_BASE/$TIMESTAMP"
+REMOTE_HOST="192.168.10.209"
+
+#килобайт / 0 - безлимит.
+SPEED_LIMIT=0
+
+BACKUPS=5
+
+
+
+log() {
+    echo "$TIMESTAMP [INFO]  $1" >> "$LOG_FILE"
+}
+error() {
+    echo "$TIMESTAMP [ERROR] $1" >> "$LOG_FILE"
+}
+
+
+
+if [ ! -d "$LOCAL_BASE" ]; then
+    error "local directory is NOT found: $LOCAL_BASE"
+    exit 1
+fi
+
+
+
+if ! ssh "$REMOTE_USER@$REMOTE_HOST" "[ -d '$REMOTE_BASE' ] || mkdir -p '$REMOTE_BASE'"; then
+    error "failed to connect: $REMOTE_HOST or create directory: $REMOTE_BASE"
+    exit 1
+fi
+
+
+
+LATEST=$(ssh "$REMOTE_USER@$REMOTE_HOST" "cd '$REMOTE_BASE' 2>/dev/null && \
+    find . -maxdepth 1 -type d ! -name '.' ! -name '..' -printf '%f\n' 2>/dev/null | \
+    sort -r | head -1")
+
+
+
+if [ -n "$LATEST" ]; then
+    LATEST="$REMOTE_BASE/$LATEST"
+    log "The previous backup will be used for: $LATEST"
+else
+    log "Previous backup not found. This backup will be full."
+fi
+
+
+
+RSYNC_CMD="rsync"
+if [ -n "$LATEST" ]; then
+    RSYNC_CMD="rsync --link-dest='$LATEST'"
+fi
+
+
+
+LIMIT=""
+if [ "$SPEED_LIMIT" -ne 0 ] 2>/dev/null; then
+    LIMIT="--bwlimit=$SPEED_LIMIT"
+    log "Bandwidth limits included: $SPEED_LIMIT KB/s (~$((SPEED_LIMIT * 8 / 1000)) Mbps)"
+else
+    log "No bandwidth restrictions."
+fi
+
+if rsync -avc --delete --exclude='.*/' $LIMIT --rsync-path="$RSYNC_CMD" "$LOCAL_BASE/" \
+    "$REMOTE_USER@$REMOTE_HOST:$BACKUP_DIR/" >> "$LOG_FILE" 2>&1; then
+    log "Backup created successfully: $BACKUP_DIR"
+
+    CLEANUP_LIST=$(ssh "$REMOTE_USER@$REMOTE_HOST" "cd '$REMOTE_BASE' 2>/dev/null && \
+    find * -maxdepth 0 -type d 2>/dev/null | sort -r | tail -n +$((BACKUPS + 1))")
+
+    if [ -n "$CLEANUP_LIST" ]; then
+        while IFS= read -r dir; do
+            [ -z "$dir" ] && continue
+            log "Removing old backup: $dir"
+            ssh "$REMOTE_USER@$REMOTE_HOST" "rm -rf '$REMOTE_BASE/$dir'"
+        done <<< "$CLEANUP_LIST"
+    else
+        log "No old backups to remove."
+    fi
+else
+    error "rsync failed for backup: $BACKUP_DIR"
+    exit 1
+fi
+
 ```
 
-`При необходимости прикрепитe сюда скриншоты
-![Название скриншота](ссылка на скриншот)`
+<img width="2559" height="1439" alt="4" src="https://github.com/user-attachments/assets/1fa25f1b-e29b-4ef3-9930-55323c4c1637" />
+
+
